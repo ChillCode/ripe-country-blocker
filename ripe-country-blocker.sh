@@ -17,7 +17,7 @@ print_usage() {
     echo "  --cc=XX     2-digit ISO-3166 country code to block."
     echo "              CH, US, IN, BR, RU"
     echo
-    echo "  --f         Force update, do not check RIPE Queryt time."
+    echo "  --f         Force update, do not check RIPE Query time."
     echo
     echo "  --v         Show debug output."
     echo
