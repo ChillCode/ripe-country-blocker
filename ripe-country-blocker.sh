@@ -1,14 +1,16 @@
 #!/bin/bash
 
 RCB_INFO_NAME="ripe-country-blocker"
-RCB_INFO_AUTHOR="ChillCode"
+RCB_INFO_DESCRIPTION="Block countries using ripe database"
+RCB_INFO_AUTHOR="chillcode"
 RCB_INFO_LICENSE="MIT"
 RCB_INFO_REPO="https://github.com/chillcode/ripe-country-blocker"
 RCB_INFO_DATE="2022-10-02"
-RCB_INFO_VERSION="1.0.0"
+RCB_INFO_UPDATE="2026-11-01"
+RCB_INFO_VERSION="1.1.0"
 
 #
-# Display program usage
+# Display program usage.
 #
 print_usage() {
     echo
@@ -21,6 +23,10 @@ print_usage() {
     echo
     echo "  --v         Show debug output."
     echo
+    echo "  --D         Flush ipset for given country."
+    echo "              To destroy the ipset iptables service needs to be stopped before we run ipset destroy SETNAME."
+    echo "              Delete rules when using --gcloud."
+    echo
     echo "  --gcloud    Use Google Cloud firewall instead of iptables and ipset."
     echo "              Requires gcloud command and a IAM user with the right permissions"
     echo
@@ -31,8 +37,8 @@ print_usage() {
     echo "  GCloud have some limits creating rules: "
     echo
     echo "  A maximum of 5000 entries per rule (can be CIDR notation)."
-    echo "  A maximum of XX rules, XX is depending on the complexity of each rule."
-    echo "  Don't expect to have so many rules."
+    echo "  A maximum of XXX rules, XXX is depending on the complexity of each rule."
+    echo "  Don't expect to have so many rules"
 }
 
 #
@@ -62,6 +68,9 @@ while [ $# -gt 0  ]; do
         --v)
             RCB_DEBUG=true
             ;;
+        --D)
+            RCB_DELETE=true
+            ;;
         --gcloud)
             RCB_USE_GCLOUD=true
             ;;
@@ -83,7 +92,8 @@ done
 # @param  string The string to output.
 # @return string Formatted message.
 # @param  string Print usage.
-# @param  string Exit with cde 1 if true.
+# @param  string Exit with code 1 if true.
+# @return void
 output_message() {
     [ $RCB_DEBUG ] && echo "[${2}] [$(date)] ${1}"
     [ $RCB_DEBUG ] && [ "${3}" = true ] && print_usage
@@ -95,11 +105,12 @@ output_message() {
 # Check if command exists.
 #
 # @param string Command to find.
+# @return void
 check_command() {
     RCB_COMMAND_INSTALLED=$(command -v "${1}")
 
     if [ $? -ne 0 ]; then
-        output_message "${1} not installed, try sudo apt-get install ${1}" "ERROR" false false
+        output_message "${1} not installed, try sudo apt install ${1}" "ERROR" false false
         exit 127
     fi
 
@@ -156,6 +167,73 @@ else
 fi
 
 #
+# Delete GCloud rule if exists.
+#
+# @param string ISO code.
+# @param string ip family.
+# @return void
+delete_gcloud_rule() {
+    #
+    # Get current rules if exists.
+    #
+    RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --quiet --verbosity=none --filter="name:block-country-${1}-${2}*" --format="value(name)[terminator=' ']")
+
+    if [ $? -ne 0 ]; then
+        output_message "Unable to list GCloud firewall rules for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
+    fi
+
+    if [ -n "${RCB_GCLOUD_RULES_TO_DELETE}" ]; then
+        # Delete current rules if exists.
+        RCB_GCLOUD_DELETE_RULES_RESULT=$(gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none)
+
+        if [ $? -ne 0 ]; then
+            output_message "${RCB_GCLOUD_RULES_TO_DELETE}" "ERROR" false true
+        fi     
+    fi
+}
+
+#
+# Delete ipset rule if exists.
+#
+# @param string ISO code.
+# @param string ip family.
+# @return void
+delete_ipset_rule() {
+    RCB_IPSET_SETNAME="country_block_${1}_${2}"
+
+    RCB_IPSET_LIST_RESULT=$(ipset -q -name list ${RCB_IPSET_SETNAME})
+    RCB_IPSET_LIST_RESULT_CODE=$?
+
+    if [ $RCB_IPSET_LIST_RESULT_CODE -ne 0 ]; then
+        output_message "ipset ${RCB_IPSET_SETNAME} does not exists, not flushing" "INFO" false false
+    else
+        # If exists flush it, destroy option can cause a controlled exception: "Set cannot be destroyed: it is in use by a kernel component".
+        # It can be manually destroyed stopping iptables an issuing "ipset destroy SETNAME" command.
+        $(ipset -q flush ${RCB_IPSET_SETNAME})
+
+        RCB_IPSET_DESTROY_RESULT_CODE=$?
+
+        if [ $RCB_IPSET_DESTROY_RESULT_CODE -ne 0 ]; then
+            output_message "could not flush ipset ${RCB_IPSET_SETNAME}" "ERROR" false true
+        else
+            output_message "ipset ${RCB_IPSET_SETNAME} flushed" "INFO" false false
+        fi
+    fi
+}
+
+if [ $RCB_DELETE ]; then
+    for RCB_FAMILY in ipv4 ipv6; do
+        if [ $RCB_USE_GCLOUD ]; then
+            delete_gcloud_rule ${RCB_COUNTRY_ISO_CODE_LOWER} ${RCB_FAMILY}
+        else
+            delete_ipset_rule ${RCB_COUNTRY_ISO_CODE} ${RCB_FAMILY}
+        fi
+    done
+
+    exit 0
+fi
+
+#
 # Check directory.
 #
 
@@ -191,6 +269,7 @@ RCB_DATA_STATUS=$(jq -r '.status' $RCB_TEMP_DATA_FILE)
 
 if [ ! "$RCB_DATA_STATUS" = "ok" ]; then
     RCB_DATA_MESSAGES=$(jq -r -c '.messages' $RCB_TEMP_DATA_FILE)
+
     output_message "RIPE status $RCB_DATA_STATUS message $RCB_DATA_MESSAGES" "ERROR" false false
     output_message "RIPE response data file: $RCB_TEMP_DATA_FILE" "ERROR" false true
 fi
@@ -203,7 +282,7 @@ RCB_TEMP_DATA_FILE_TIME=$(date -d $RCB_DATA_QUERY_TIME +%s)
 # Walk throug RIPE database.
 
 for RCB_FAMILY in ipv4 ipv6; do
-    #Check if local database exists and get file time.
+    # Check if local database exists and get file time.
     RCB_DATA_FILE="$RCB_TEMP_DIR/${RCB_FAMILY}-$RCB_COUNTRY_ISO_CODE"
 
     if [ -f "${RCB_DATA_FILE}" ]; then
@@ -212,56 +291,48 @@ for RCB_FAMILY in ipv4 ipv6; do
         RCB_DATA_FILE_TIME=0
     fi
 
-    #If remote database is not newer don't process it but if option --force is specified ignore this check.
+    # If remote database is not newer don't process it but if option --force is specified ignore this check.
     if [ ! $RCB_FORCE_UPDATE ] && [ ! $RCB_TEMP_DATA_FILE_TIME -gt $RCB_DATA_FILE_TIME ]; then
         output_message "$RCB_TEMP_DATA_FILE ($(date --date=@$RCB_TEMP_DATA_FILE_TIME)) is not newer than $RCB_DATA_FILE ($(date --date=@$RCB_DATA_FILE_TIME)), not updating ipset." "INFO" false false
     else
-        #If remote database is newer process it.
+        # If remote database is newer process it.
         RCB_DATABASE_RESULT=$(jq -r ".data.resources.$RCB_FAMILY | .[]" $RCB_TEMP_DATA_FILE > $RCB_DATA_FILE.tmp)
 
         if [ $? -ne 0 ]; then
             output_message "RIPE database $RCB_TEMP_DATA_FILE not extracted to $RCB_DATA_FILE.tmp" "ERROR" false false
             continue
         else
-            #Set RIPE query time to local database.
+            # Set RIPE query time to local database.
             RCB_UPDATE_FILE_TIME_RESULT=$(touch -d "$RCB_DATA_QUERY_TIME" "$RCB_DATA_FILE.tmp")
 
-            #Lockup total entries to block.
+            # Lockup total entries to block.
             RCB_DATA_FILE_ENTRIES=$(awk 'END { print NR }' "$RCB_DATA_FILE.tmp")
 
             output_message "$RCB_DATA_FILE total entries $RCB_DATA_FILE_ENTRIES" "INFO" false false
 
-            #Move temp database to local database.
+            # Move temp database to local database.
             $(mv "$RCB_DATA_FILE.tmp" "$RCB_DATA_FILE")
         fi
     
-        #Use gcloud
+        # Use gcloud
         if [ $RCB_USE_GCLOUD ]; then
+            # Delete current rules if exists. Faster than update at the time tests were done.
+            delete_gcloud_rule ${RCB_COUNTRY_ISO_CODE_LOWER} ${RCB_FAMILY}
 
-            #
-            # Get current rules if exists.
-            #
-            RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --filter="name:block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}*" --format="value(name)[terminator=' ']")
-
-            if [ -n "${RCB_GCLOUD_RULES_TO_DELETE}" ]; then
-                # Delete current rules if exists.
-                RCB_GCLOUD_DELETE_RULES_RESULT=$(gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none)
-            fi
-
-            #Walk the RIPE database and add all ip's to the ruleset
+            # Walk the RIPE database and add all ip's to the ruleset.
             RCB_COUNTER=0
             while read -r RCB_IPSET; do
-                # Max VM instance GCloud Firewall entries 5000 and also we prevent too long argument error on Linux.
+                # Max VM instance GCloud Firewall entries 5000 and also to prevent too long argument error on Linux.
                 if [ $RCB_COUNTER -gt 4999 ]; then
-                    #Use a counter to append to rule name.
+                    # Use a counter to append to rule name.
                     RCB_GCLOUD_COUNTER=$((RCB_COUNTER + RCB_GCLOUD_COUNTER))
                     RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_GCLOUD_COUNTER}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1 --source-ranges="${RCB_CSV_LIST}")
-                    #Reset list and counter after inserted.
+                    # Reset list and counter after inserted.
                     RCB_CSV_LIST=""
                     RCB_COUNTER=0
                 fi
 
-                #Fill list with sources-ranges
+                # Fill list with sources-ranges
                 if [ -z $RCB_CSV_LIST ]; then
                     RCB_CSV_LIST="${RCB_IPSET}"
                 else
@@ -272,9 +343,13 @@ for RCB_FAMILY in ipv4 ipv6; do
 
             done < "${RCB_DATA_FILE}"
 
-            #create rule instead with less than 5000 entries or last rule if there is pagination.
+            # Create rule instead with less than 5000 entries or last rule if there is pagination.
             if [ -z $RCB_GCLOUD_COUNTER ]; then
                 RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_COUNTER}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1 --source-ranges="${RCB_CSV_LIST}")
+
+                if [ $? -ne 0 ]; then
+                    output_message "Unable to delete GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
+                fi
 
                 unset RCB_CSV_LIST
                 continue
@@ -282,25 +357,29 @@ for RCB_FAMILY in ipv4 ipv6; do
                 RCB_GCLOUD_COUNTER=$((RCB_COUNTER + RCB_GCLOUD_COUNTER))
                 RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_GCLOUD_COUNTER}" --source-ranges="${RCB_CSV_LIST}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1)
 
+                if [ $? -ne 0 ]; then
+                    output_message "Unable to delete GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
+                fi
+
                 unset RCB_CSV_LIST
                 unset RCB_GCLOUD_COUNTER
                 continue
             fi
         else
-            #Check if ipset already exists
+            # Check if ipset already exists.
             RCB_IPSET_SETNAME="country_block_${RCB_COUNTRY_ISO_CODE}_${RCB_FAMILY}"
 
             RCB_IPSET_LIST_RESULT=$(ipset -q -name list ${RCB_IPSET_SETNAME})
 
             if [ $? -ne 0 ]; then
-                #If does not exists create a hash:net ipset
+                # If does not exists create a hash:net ipset.
                 if [ "$RCB_FAMILY" = "ipv6" ]; then
-                $(ipset -q create ${RCB_IPSET_SETNAME} hash:net family inet6)
+                    $(ipset -q create ${RCB_IPSET_SETNAME} hash:net family inet6)
                 else
                     $(ipset -q create ${RCB_IPSET_SETNAME} hash:net)
                 fi
             else
-                #If exists flush it
+                # If exists flush it.
                 $(ipset -q flush ${RCB_IPSET_SETNAME})
             fi
 
@@ -308,25 +387,24 @@ for RCB_FAMILY in ipv4 ipv6; do
                 RCB_IPSET_ADD_RESULT=$(ipset -q add ${RCB_IPSET_SETNAME} "$RCB_IPSET")
             done < "${RCB_DATA_FILE}"
 
-            #Set command to use depending on ipset family
+            # Set command to use depending on ipset family.
             if [ "$RCB_FAMILY" = "ipv6" ]; then
                 RCB_IPTABLES_VERSION=ip6tables
             else
                 RCB_IPTABLES_VERSION=iptables
             fi
 
-            #Check if ipset is already added to iptables.
+            # Check if ipset is already added to iptables.
             RCB_IPTABLES_RESULT=$($RCB_IPTABLES_VERSION -nL | grep -e "DROP.*match-set.*${RCB_IPSET_SETNAME}.*src")
 
             if [ $? -ne 0 ]; then
 
-                #Add ipset to iptables.
+                # Add ipset to iptables.
                 RCB_IPTABLES_SET_RESULT=$($RCB_IPTABLES_VERSION -I INPUT 1 -m set --match-set ${RCB_IPSET_SETNAME} src -j DROP)
-
                 RCB_IPTABLES_SET_RESULT_CODE=$?
 
                 if [ $RCB_IPTABLES_SET_RESULT_CODE -ne 0 ]; then
-                    output_message "${RCB_IPSET_SETNAME} not added to iptables!" "INFO" false false
+                    output_message "${RCB_IPSET_SETNAME} not added to iptables!" "ERROR" false false
                     exit $RCB_IPTABLES_SET_RESULT
                 else
                     output_message "${RCB_IPSET_SETNAME} added to iptables, job finished!" "INFO" false false
