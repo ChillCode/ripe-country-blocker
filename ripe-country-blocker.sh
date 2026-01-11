@@ -6,7 +6,7 @@ RCB_INFO_AUTHOR="chillcode"
 RCB_INFO_LICENSE="MIT"
 RCB_INFO_REPO="https://github.com/chillcode/ripe-country-blocker"
 RCB_INFO_DATE="2022-10-02"
-RCB_INFO_UPDATE="2026-11-01"
+RCB_INFO_UPDATE="2026-01-11"
 RCB_INFO_VERSION="1.1.0"
 
 #
