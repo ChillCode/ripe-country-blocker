@@ -139,6 +139,12 @@ RCB_COUNTRY_ISO_CODE=$(echo $RCB_COUNTRY_ISO_CODE | tr '[:lower:]' '[:upper:]')
 RCB_COUNTRY_ISO_CODE_LOWER=$(echo $RCB_COUNTRY_ISO_CODE | tr '[:upper:]' '[:lower:]')
 
 #
+# Check directory.
+#
+
+RCB_TEMP_DIR=${RCB_TEMP_DIR:-/tmp}
+
+#
 # Check required commands
 #
 
@@ -230,21 +236,19 @@ if [ $RCB_DELETE ]; then
         fi
     done
 
+    RCB_TEMP_DATA_FILE_PATH="${RCB_TEMP_DIR}/ipv*-${RCB_COUNTRY_ISO_CODE}*"
+
+    $(rm -f ${RCB_TEMP_DATA_FILE_PATH})
+
     exit 0
 fi
-
-#
-# Check directory.
-#
-
-RCB_TEMP_DIR=${RCB_TEMP_DIR:-/tmp}
 
 #
 # Prepare RIPE data.
 #
 
 # Create temp data file.
-RCB_TEMP_DATA_FILE_PATH="/tmp/stat-ripe-country-resource-list-${RCB_COUNTRY_ISO_CODE}-XXXXX.json"
+RCB_TEMP_DATA_FILE_PATH="${RCB_TEMP_DIR}/stat-ripe-country-resource-list-${RCB_COUNTRY_ISO_CODE}-XXXXX.json"
 RCB_TEMP_DATA_FILE=$(mktemp -q ${RCB_TEMP_DATA_FILE_PATH})
 RCB_TEMP_DATA_FILE_RESULT_CODE=$?
 
@@ -348,7 +352,7 @@ for RCB_FAMILY in ipv4 ipv6; do
                 RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_COUNTER}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1 --source-ranges="${RCB_CSV_LIST}")
 
                 if [ $? -ne 0 ]; then
-                    output_message "Unable to delete GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
+                    output_message "Unable to create GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
                 fi
 
                 unset RCB_CSV_LIST
@@ -358,7 +362,7 @@ for RCB_FAMILY in ipv4 ipv6; do
                 RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_GCLOUD_COUNTER}" --source-ranges="${RCB_CSV_LIST}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1)
 
                 if [ $? -ne 0 ]; then
-                    output_message "Unable to delete GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
+                    output_message "Unable to create GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
                 fi
 
                 unset RCB_CSV_LIST
