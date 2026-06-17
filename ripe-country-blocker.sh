@@ -89,7 +89,7 @@ while [ $# -gt 0  ]; do
             RCB_USE_GCLOUD=true
             ;;
         --o=*)
-            RCB_TEMP_DIR=="${1#--o=}"
+            RCB_TEMP_DIR="${1#--o=}"
             ;;
         *)
             echo "Invalid argument: '${1}'."
@@ -185,7 +185,7 @@ delete_gcloud_rule() {
 
     if [ -n "${RCB_GCLOUD_RULES_TO_DELETE}" ]; then
         # Delete current rules if exists.
-        if ! gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none >/dev/null 2>&1; then
+        if ! gcloud compute firewall-rules delete "${RCB_GCLOUD_RULES_TO_DELETE}" --quiet --verbosity=none >/dev/null 2>&1; then
             output_message "Failed to delete: ${RCB_GCLOUD_RULES_TO_DELETE}" "ERROR" false true
         else
             output_message "Deleted GCloud firewall rule for ${1}-${2}-${3}." "INFO" false false
@@ -250,6 +250,8 @@ if [[ ! -d "${RCB_WORK_DIR}" ]]; then
 fi
 
 cleanup() {
+    local RCB_WORK_DIR
+
     if [[ -d "${RCB_WORK_DIR}" ]]; then
         rm -rf "${RCB_WORK_DIR}"
     fi
