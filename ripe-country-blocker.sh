@@ -178,20 +178,24 @@ delete_gcloud_rule() {
     # Get current rules if exists.
     #
     local RCB_GCLOUD_RULES_TO_DELETE
+    local RCB_GCLOUD_ISO="${1}"
+    local RCB_GCLOUD_FAMILY="${2}"
+    local RCB_GCLOUD_DIR="${3}"
+    local RCB_GCLOUD_RULES_TO_DELETE_RAW
 
-    if ! RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --filter="name:block-country-${1}-${2}-${3}*" --format="value(name)" --quiet --verbosity=none); then
-        output_message "Unable to list GCloud firewall rules for ${1}-${2}-${3}, check gcloud configuration and IAM permissions" "ERROR" false true
+    if ! RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --filter="name:block-country-${RCB_GCLOUD_ISO}-${RCB_GCLOUD_FAMILY}-${RCB_GCLOUD_DIR}*" --format="value(name)" --quiet --verbosity=none); then
+        output_message "Unable to list GCloud firewall rules for ${RCB_GCLOUD_ISO}-${2}-${RCB_GCLOUD_DIR}, check gcloud configuration and IAM permissions" "ERROR" false true
     fi
 
     if [ -n "${RCB_GCLOUD_RULES_TO_DELETE}" ]; then
         # Delete current rules if exists.
-        if ! gcloud compute firewall-rules delete "${RCB_GCLOUD_RULES_TO_DELETE}" --quiet --verbosity=none >/dev/null 2>&1; then
+        if ! gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none >/dev/null 2>&1; then
             output_message "Failed to delete: ${RCB_GCLOUD_RULES_TO_DELETE}" "ERROR" false true
         else
-            output_message "Deleted GCloud firewall rule for ${1}-${2}-${3}." "INFO" false false
+            output_message "Deleted GCloud firewall rule for ${RCB_GCLOUD_ISO}-${RCB_GCLOUD_FAMILY}-${RCB_GCLOUD_DIR}." "INFO" false false
         fi     
     else
-        output_message "GCloud firewall rule for ${1}-${2}-${3} were not found, not deleting." "INFO" false false
+        output_message "GCloud firewall rule for ${RCB_GCLOUD_ISO}-${RCB_GCLOUD_FAMILY}-${RCB_GCLOUD_DIR} were not found, not deleting." "INFO" false false
     fi
 }
 
