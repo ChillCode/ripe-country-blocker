@@ -1,13 +1,28 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-RCB_INFO_NAME="ripe-country-blocker"
-RCB_INFO_DESCRIPTION="Block countries using ripe database"
-RCB_INFO_AUTHOR="chillcode"
-RCB_INFO_LICENSE="MIT"
-RCB_INFO_REPO="https://github.com/chillcode/ripe-country-blocker"
-RCB_INFO_DATE="2022-10-02"
-RCB_INFO_UPDATE="2026-01-11"
-RCB_INFO_VERSION="1.1.0"
+set -u
+set -o pipefail
+
+IFS=$'\n\t'
+
+readonly RCB_INFO_NAME="ripe-country-blocker"
+readonly RCB_INFO_DESCRIPTION="Block countries using ripe database"
+readonly RCB_INFO_AUTHOR="chillcode"
+readonly RCB_INFO_LICENSE="MIT"
+readonly RCB_INFO_REPO="https://github.com/chillcode/ripe-country-blocker"
+readonly RCB_INFO_DATE="2022-10-02"
+readonly RCB_INFO_UPDATE="2026-06-16"
+readonly RCB_INFO_VERSION="2.0.0"
+
+RCB_COUNTRY_ISO_CODE=""
+RCB_FORCE_UPDATE=false
+RCB_DEBUG=false
+RCB_DELETE=false
+RCB_USE_GCLOUD=false
+RCB_TEMP_DIR="/tmp"
+
+RCB_BLOCK_INGRESS=false
+RCB_BLOCK_EGRESS=false
 
 #
 # Display program usage.
@@ -20,6 +35,10 @@ print_usage() {
     echo "              CH, US, IN, BR, RU"
     echo
     echo "  --f         Force update, do not check RIPE Query time."
+    echo
+    echo "  --i         Block ingress traffic. (default iptables)"
+    echo "  --e         Block egress traffic."
+    echo "  --a         Block all traffic. (default GCloud)"
     echo
     echo "  --v         Show debug output."
     echo
@@ -42,15 +61,6 @@ print_usage() {
 }
 
 #
-# Get string length.
-#
-# @param  string The string being measured for length.
-# @return Returns the length of the given string.
-strlen() {
-    echo "${1}" | awk '{print length()}'
-}
-
-#
 # Get options.
 #
 while [ $# -gt 0  ]; do
@@ -60,6 +70,16 @@ while [ $# -gt 0  ]; do
             ;;
         --f)
             RCB_FORCE_UPDATE=true
+            ;;
+        --i)
+            RCB_BLOCK_INGRESS=true
+            ;;
+        --e)
+            RCB_BLOCK_EGRESS=true
+            ;;
+        --a)
+            RCB_BLOCK_INGRESS=true
+            RCB_BLOCK_EGRESS=true
             ;;
         --h | --help)
             print_usage
@@ -86,6 +106,16 @@ while [ $# -gt 0  ]; do
     shift
 done
 
+if [[ "$RCB_BLOCK_INGRESS" == false && "$RCB_BLOCK_EGRESS" == false ]]; then
+    if [[ "$RCB_USE_GCLOUD" == true ]]; then
+        RCB_BLOCK_INGRESS=true
+        RCB_BLOCK_EGRESS=true
+    else
+        RCB_BLOCK_INGRESS=true
+        RCB_BLOCK_EGRESS=true
+    fi
+fi
+
 #
 # Output message to console.
 #
@@ -95,10 +125,9 @@ done
 # @param  string Exit with code 1 if true.
 # @return void
 output_message() {
-    [ $RCB_DEBUG ] && echo "[${2}] [$(date)] ${1}"
-    [ $RCB_DEBUG ] && [ "${3}" = true ] && print_usage
-
-    [ "${4}" = true ] && exit 1
+    [[ "$RCB_DEBUG" == true ]] && echo "[${2}] [$(date)] ${1}"
+    [[ "$RCB_DEBUG" == true && "${3}" == true ]] && print_usage
+    [[ "${4}" == true ]] && exit 1
 }
 
 #
@@ -107,14 +136,11 @@ output_message() {
 # @param string Command to find.
 # @return void
 check_command() {
-    RCB_COMMAND_INSTALLED=$(command -v "${1}")
-
-    if [ $? -ne 0 ]; then
-        output_message "${1} not installed, try sudo apt install ${1}" "ERROR" false false
+    if ! command -v "${1}" >/dev/null 2>&1; then
+        output_message "${1} not installed, try apt install ${1}" "ERROR" false false
         exit 127
     fi
-
-    output_message "Found ${RCB_COMMAND_INSTALLED}" "INFO" false false
+    output_message "Found ${1}" "INFO" false false
 }
 
 #
@@ -124,52 +150,27 @@ if [ -z "$RCB_COUNTRY_ISO_CODE" ]; then
     output_message "Invalid country code." "ERROR" false true
 fi
 
-# Check Country Code ISO 3166 length, must be 2-digit code.
-
-RCB_COUNTRY_ISO_CODE_LEN=$(strlen "$RCB_COUNTRY_ISO_CODE")
-
-if [ $RCB_COUNTRY_ISO_CODE_LEN -ne 2 ]; then
+if ! [[ "$RCB_COUNTRY_ISO_CODE" =~ ^[A-Za-z]{2}$ ]]; then
     output_message "Invalid argument: --cc=ISO Country code must be 2-sigit code." "ERROR" false false
     output_message "Type '${RCB_INFO_NAME} --help' for available options." "ERROR" false true
 fi
 
 # Format Country Code to uppercase for internal USE and to lowercase for GCloud Rules which only allows lowercase
-
-RCB_COUNTRY_ISO_CODE=$(echo $RCB_COUNTRY_ISO_CODE | tr '[:lower:]' '[:upper:]')
-RCB_COUNTRY_ISO_CODE_LOWER=$(echo $RCB_COUNTRY_ISO_CODE | tr '[:upper:]' '[:lower:]')
-
-#
-# Check directory.
-#
-
-RCB_TEMP_DIR=${RCB_TEMP_DIR:-/tmp}
+RCB_COUNTRY_ISO_CODE=${RCB_COUNTRY_ISO_CODE^^}
+RCB_COUNTRY_ISO_CODE_LOWER=${RCB_COUNTRY_ISO_CODE,,}
 
 #
 # Check required commands
 #
-
-# Check wget
 check_command "wget"
-
-# Check jq
 check_command "jq"
 
-if [ -z "$RCB_USE_GCLOUD" ]; then
-
-    # Check iptables
+if [[ "$RCB_USE_GCLOUD" == false ]]; then
     check_command "iptables"
-
-    # Check ip6tables
     check_command "ip6tables"
-
-    # Check ipset
     check_command "ipset"
-
 else
-
-    # Check gcloud
     check_command "gcloud"
-
 fi
 
 #
@@ -182,19 +183,21 @@ delete_gcloud_rule() {
     #
     # Get current rules if exists.
     #
-    RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --quiet --verbosity=none --filter="name:block-country-${1}-${2}*" --format="value(name)[terminator=' ']")
+    RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --filter="name:block-country-${1}-${2}-${3}*" --format="value(name)" --quiet --verbosity=none)
 
     if [ $? -ne 0 ]; then
-        output_message "Unable to list GCloud firewall rules for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
+        output_message "Unable to list GCloud firewall rules for ${1}-${2}-${3}, check gcloud configuration and IAM permissions" "ERROR" false true
     fi
 
     if [ -n "${RCB_GCLOUD_RULES_TO_DELETE}" ]; then
         # Delete current rules if exists.
-        RCB_GCLOUD_DELETE_RULES_RESULT=$(gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none)
-
-        if [ $? -ne 0 ]; then
-            output_message "${RCB_GCLOUD_RULES_TO_DELETE}" "ERROR" false true
+        if ! gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none >/dev/null 2>&1; then
+            output_message "Failed to delete: ${RCB_GCLOUD_RULES_TO_DELETE}" "ERROR" false true
+        else
+            output_message "Deleted GCloud firewall rules for ${1}-${2}-${3}." "INFO" false false
         fi     
+    else
+        output_message "GCloud firewall rules for ${1}-${2}-${3} were not found, not deleting." "INFO" false false
     fi
 }
 
@@ -207,19 +210,12 @@ delete_gcloud_rule() {
 delete_ipset_rule() {
     RCB_IPSET_SETNAME="country_block_${1}_${2}"
 
-    RCB_IPSET_LIST_RESULT=$(ipset -q -name list ${RCB_IPSET_SETNAME})
-    RCB_IPSET_LIST_RESULT_CODE=$?
-
-    if [ $RCB_IPSET_LIST_RESULT_CODE -ne 0 ]; then
+    if ! ipset -q -name list "${RCB_IPSET_SETNAME}" >/dev/null 2>&1; then
         output_message "ipset ${RCB_IPSET_SETNAME} does not exists, not flushing" "INFO" false false
     else
         # If exists flush it, destroy option can cause a controlled exception: "Set cannot be destroyed: it is in use by a kernel component".
         # It can be manually destroyed stopping iptables an issuing "ipset destroy SETNAME" command.
-        $(ipset -q flush ${RCB_IPSET_SETNAME})
-
-        RCB_IPSET_DESTROY_RESULT_CODE=$?
-
-        if [ $RCB_IPSET_DESTROY_RESULT_CODE -ne 0 ]; then
+        if ! ipset -q flush "${RCB_IPSET_SETNAME}" >/dev/null 2>&1; then
             output_message "could not flush ipset ${RCB_IPSET_SETNAME}" "ERROR" false true
         else
             output_message "ipset ${RCB_IPSET_SETNAME} flushed" "INFO" false false
@@ -227,19 +223,24 @@ delete_ipset_rule() {
     fi
 }
 
-if [ $RCB_DELETE ]; then
+if [[ "$RCB_DELETE" == true ]]; then
     for RCB_FAMILY in ipv4 ipv6; do
-        if [ $RCB_USE_GCLOUD ]; then
-            delete_gcloud_rule ${RCB_COUNTRY_ISO_CODE_LOWER} ${RCB_FAMILY}
+        if [[ "$RCB_USE_GCLOUD" == true ]]; then
+            for RCB_DIRECTION in "INGRESS" "EGRESS"; do
+                [[ "$RCB_DIRECTION" == "INGRESS" && "$RCB_BLOCK_INGRESS" == false ]] && continue
+                [[ "$RCB_DIRECTION" == "EGRESS" && "$RCB_BLOCK_EGRESS" == false ]] && continue
+
+                # Convert to to lower
+                RCB_DIR_LOWER=${RCB_DIRECTION,,}
+
+                delete_gcloud_rule "${RCB_COUNTRY_ISO_CODE_LOWER}" "${RCB_FAMILY}" "${RCB_DIR_LOWER}"
+            done
         else
-            delete_ipset_rule ${RCB_COUNTRY_ISO_CODE} ${RCB_FAMILY}
+            delete_ipset_rule "${RCB_COUNTRY_ISO_CODE}" "${RCB_FAMILY}"
         fi
     done
 
-    RCB_TEMP_DATA_FILE_PATH="${RCB_TEMP_DIR}/ipv*-${RCB_COUNTRY_ISO_CODE}*"
-
-    $(rm -f ${RCB_TEMP_DATA_FILE_PATH})
-
+    rm -f "${RCB_TEMP_DIR}"/ipv*-"${RCB_COUNTRY_ISO_CODE}"*
     exit 0
 fi
 
@@ -249,26 +250,28 @@ fi
 
 # Create temp data file.
 RCB_TEMP_DATA_FILE_PATH="${RCB_TEMP_DIR}/stat-ripe-country-resource-list-${RCB_COUNTRY_ISO_CODE}-XXXXX.json"
-RCB_TEMP_DATA_FILE=$(mktemp -q ${RCB_TEMP_DATA_FILE_PATH})
-RCB_TEMP_DATA_FILE_RESULT_CODE=$?
+RCB_TEMP_DATA_FILE=$(mktemp -q "${RCB_TEMP_DATA_FILE_PATH}")
 
-if [ $RCB_TEMP_DATA_FILE_RESULT_CODE -ne 0 ]; then
+if [ $? -ne 0 ]; then
     output_message "mktemp failed creating temp ripe database: ${RCB_TEMP_DATA_FILE_PATH}" "ERROR" false true
 fi
 
-# Download RIPE JSON data file.
+cleanup() {
+    if ! rm -f "$RCB_TEMP_DATA_FILE"; then
+        output_message "Unable to delete temp file ${RCB_TEMP_DATA_FILE}" "ERROR" false true
+    fi
+}
 
+trap cleanup EXIT
+
+# Download RIPE JSON data file.
 RCB_URL="https://stat.ripe.net/data/country-resource-list/data.json?v4_format=prefix&resource=${RCB_COUNTRY_ISO_CODE}"
 
-RCB_WGET_RESULT=$(wget -q "$RCB_URL" -O $RCB_TEMP_DATA_FILE)
-RCB_WGET_RESULT_CODE=$?
-
-if [ $RCB_WGET_RESULT_CODE -ne 0 ]; then
+if ! wget -q "$RCB_URL" -O "$RCB_TEMP_DATA_FILE"; then
     output_message "wget failed downloading RIPE database at $RCB_URL" "ERROR" false true
 fi
 
 # Check RIPE JSON data file.
-
 RCB_DATA_STATUS=$(jq -r '.status' $RCB_TEMP_DATA_FILE)
 
 if [ ! "$RCB_DATA_STATUS" = "ok" ]; then
@@ -279,12 +282,10 @@ if [ ! "$RCB_DATA_STATUS" = "ok" ]; then
 fi
 
 # Get new RIPE JSON query time.
-
-RCB_DATA_QUERY_TIME=$(jq -r '.data.query_time' $RCB_TEMP_DATA_FILE)
-RCB_TEMP_DATA_FILE_TIME=$(date -d $RCB_DATA_QUERY_TIME +%s)
+RCB_DATA_QUERY_TIME=$(jq -r '.data.query_time' "$RCB_TEMP_DATA_FILE")
+RCB_TEMP_DATA_FILE_TIME=$(date -d "$RCB_DATA_QUERY_TIME" +%s)
 
 # Walk throug RIPE database.
-
 for RCB_FAMILY in ipv4 ipv6; do
     # Check if local database exists and get file time.
     RCB_DATA_FILE="$RCB_TEMP_DIR/${RCB_FAMILY}-$RCB_COUNTRY_ISO_CODE"
@@ -296,13 +297,10 @@ for RCB_FAMILY in ipv4 ipv6; do
     fi
 
     # If remote database is not newer don't process it but if option --force is specified ignore this check.
-    if [ ! $RCB_FORCE_UPDATE ] && [ ! $RCB_TEMP_DATA_FILE_TIME -gt $RCB_DATA_FILE_TIME ]; then
+    if [[ "$RCB_FORCE_UPDATE" == false ]] && [[ ! "$RCB_TEMP_DATA_FILE_TIME" -gt "$RCB_DATA_FILE_TIME" ]]; then
         output_message "$RCB_TEMP_DATA_FILE ($(date --date=@$RCB_TEMP_DATA_FILE_TIME)) is not newer than $RCB_DATA_FILE ($(date --date=@$RCB_DATA_FILE_TIME)), not updating ipset." "INFO" false false
     else
-        # If remote database is newer process it.
-        RCB_DATABASE_RESULT=$(jq -r ".data.resources.$RCB_FAMILY | .[]" $RCB_TEMP_DATA_FILE > $RCB_DATA_FILE.tmp)
-
-        if [ $? -ne 0 ]; then
+        if ! jq -r ".data.resources.$RCB_FAMILY | .[]" "$RCB_TEMP_DATA_FILE" > "$RCB_DATA_FILE.tmp"; then
             output_message "RIPE database $RCB_TEMP_DATA_FILE not extracted to $RCB_DATA_FILE.tmp" "ERROR" false false
             continue
         else
@@ -315,106 +313,112 @@ for RCB_FAMILY in ipv4 ipv6; do
             output_message "$RCB_DATA_FILE total entries $RCB_DATA_FILE_ENTRIES" "INFO" false false
 
             # Move temp database to local database.
-            $(mv "$RCB_DATA_FILE.tmp" "$RCB_DATA_FILE")
+            mv "$RCB_DATA_FILE.tmp" "$RCB_DATA_FILE"
         fi
     
         # Use gcloud
-        if [ $RCB_USE_GCLOUD ]; then
-            # Delete current rules if exists. Faster than update at the time tests were done.
-            delete_gcloud_rule ${RCB_COUNTRY_ISO_CODE_LOWER} ${RCB_FAMILY}
+        if [[ "$RCB_USE_GCLOUD" == true ]]; then
+            # Ingress/Egress Logic
+            for RCB_DIRECTION in "INGRESS" "EGRESS"; do
+                [[ "$RCB_DIRECTION" == "INGRESS" && "$RCB_BLOCK_INGRESS" == false ]] && continue
+                [[ "$RCB_DIRECTION" == "EGRESS" && "$RCB_BLOCK_EGRESS" == false ]] && continue
 
-            # Walk the RIPE database and add all ip's to the ruleset.
-            RCB_COUNTER=0
-            while read -r RCB_IPSET; do
-                # Max VM instance GCloud Firewall entries 5000 and also to prevent too long argument error on Linux.
-                if [ $RCB_COUNTER -gt 4999 ]; then
-                    # Use a counter to append to rule name.
+                # Convert to to lower
+                RCB_DIR_LOWER=$(echo "$RCB_DIRECTION" | tr '[:upper:]' '[:lower:]')
+
+                # Delete current rules if exists. Faster than update at the time tests were done.
+                delete_gcloud_rule ${RCB_COUNTRY_ISO_CODE_LOWER} ${RCB_FAMILY} ${RCB_DIR_LOWER}
+
+                # Set direction
+                RCB_RANGES_FLAG="--source-ranges"
+                [[ "$RCB_DIRECTION" == "EGRESS" ]] && RCB_RANGES_FLAG="--destination-ranges"
+
+                RCB_COUNTER=0
+                RCB_GCLOUD_COUNTER=0
+                RCB_CSV_LIST=""
+            
+                while read -r RCB_IPSET; do
+                    # Max VM instance GCloud Firewall entries 5000 and also to prevent too long argument error on Linux.
+                    if [ $RCB_COUNTER -gt 4999 ]; then
+                        # Use a counter to append to rule name.
+                        RCB_GCLOUD_COUNTER=$((RCB_COUNTER + RCB_GCLOUD_COUNTER))
+
+                        if ! gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_DIR_LOWER}-${RCB_GCLOUD_COUNTER}" --description="Block ${RCB_DIR_LOWER} traffic from/to ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=${RCB_DIRECTION} --priority=1 ${RCB_RANGES_FLAG}="${RCB_CSV_LIST}" --quiet --verbosity=none >/dev/null 2>&1; then
+                            output_message "Unable to create GCloud firewall rule for ${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY} (${RCB_DIRECTION})" "ERROR" false true
+                        else
+                            output_message "Created GCloud firewall rule for ${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY} (${RCB_DIRECTION})" "INFO" false false
+                        fi
+
+                        # Reset list and counter after inserted.
+                        RCB_CSV_LIST=""
+                        RCB_COUNTER=0
+                    fi
+
+                    # Fill list with ranges
+                    if [ -z "$RCB_CSV_LIST" ]; then
+                        RCB_CSV_LIST="${RCB_IPSET}"
+                    else
+                        RCB_CSV_LIST="${RCB_CSV_LIST},${RCB_IPSET}"
+                    fi
+                    RCB_COUNTER=$((RCB_COUNTER + 1))
+                done < "${RCB_DATA_FILE}"
+ 
+                # Create rule instead with less than 5000 entries or last rule if there is pagination.
+                if [ -n "$RCB_CSV_LIST" ]; then
                     RCB_GCLOUD_COUNTER=$((RCB_COUNTER + RCB_GCLOUD_COUNTER))
-                    RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_GCLOUD_COUNTER}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1 --source-ranges="${RCB_CSV_LIST}")
-                    # Reset list and counter after inserted.
-                    RCB_CSV_LIST=""
-                    RCB_COUNTER=0
+
+                    if ! gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_DIR_LOWER}-${RCB_GCLOUD_COUNTER}" --description="Block ${RCB_DIR_LOWER} traffic from/to ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=${RCB_DIRECTION} --priority=1 ${RCB_RANGES_FLAG}="${RCB_CSV_LIST}" --quiet --verbosity=none >/dev/null 2>&1; then
+                        output_message "Unable to create GCloud firewall rule for ${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY} (${RCB_DIRECTION})" "ERROR" false true
+                    else
+                        output_message "Created GCloud firewall rule for ${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY} (${RCB_DIRECTION})" "INFO" false false
+                    fi
                 fi
-
-                # Fill list with sources-ranges
-                if [ -z $RCB_CSV_LIST ]; then
-                    RCB_CSV_LIST="${RCB_IPSET}"
-                else
-                    RCB_CSV_LIST="${RCB_CSV_LIST},${RCB_IPSET}"
-                fi
-
-                RCB_COUNTER=$((RCB_COUNTER + 1))
-
-            done < "${RCB_DATA_FILE}"
-
-            # Create rule instead with less than 5000 entries or last rule if there is pagination.
-            if [ -z $RCB_GCLOUD_COUNTER ]; then
-                RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_COUNTER}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1 --source-ranges="${RCB_CSV_LIST}")
-
-                if [ $? -ne 0 ]; then
-                    output_message "Unable to create GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
-                fi
-
-                unset RCB_CSV_LIST
-                continue
-            else
-                RCB_GCLOUD_COUNTER=$((RCB_COUNTER + RCB_GCLOUD_COUNTER))
-                RCB_GCLOUD_CREATE_RESULT=$(gcloud compute firewall-rules create "block-country-${RCB_COUNTRY_ISO_CODE_LOWER}-${RCB_FAMILY}-${RCB_GCLOUD_COUNTER}" --source-ranges="${RCB_CSV_LIST}" --description="Block incoming traffic on all ports from ${RCB_COUNTRY_ISO_CODE}" --action=DENY --rules=all --direction=INGRESS --priority=1)
-
-                if [ $? -ne 0 ]; then
-                    output_message "Unable to create GCloud firewall rule for ${1}-${2}, check gcloud configuration and IAM permissions" "ERROR" false true
-                fi
-
-                unset RCB_CSV_LIST
-                unset RCB_GCLOUD_COUNTER
-                continue
-            fi
+            done
         else
             # Check if ipset already exists.
             RCB_IPSET_SETNAME="country_block_${RCB_COUNTRY_ISO_CODE}_${RCB_FAMILY}"
-
-            RCB_IPSET_LIST_RESULT=$(ipset -q -name list ${RCB_IPSET_SETNAME})
-
-            if [ $? -ne 0 ]; then
-                # If does not exists create a hash:net ipset.
-                if [ "$RCB_FAMILY" = "ipv6" ]; then
-                    $(ipset -q create ${RCB_IPSET_SETNAME} hash:net family inet6)
-                else
-                    $(ipset -q create ${RCB_IPSET_SETNAME} hash:net)
-                fi
-            else
-                # If exists flush it.
-                $(ipset -q flush ${RCB_IPSET_SETNAME})
-            fi
-
-            while read -r RCB_IPSET; do
-                RCB_IPSET_ADD_RESULT=$(ipset -q add ${RCB_IPSET_SETNAME} "$RCB_IPSET")
-            done < "${RCB_DATA_FILE}"
-
             # Set command to use depending on ipset family.
             if [ "$RCB_FAMILY" = "ipv6" ]; then
                 RCB_IPTABLES_VERSION=ip6tables
+                RCB_IPSET_FAMILY="family inet6"
             else
                 RCB_IPTABLES_VERSION=iptables
+                RCB_IPSET_FAMILY="family inet"
             fi
 
-            # Check if ipset is already added to iptables.
-            RCB_IPTABLES_RESULT=$($RCB_IPTABLES_VERSION -nL | grep -e "DROP.*match-set.*${RCB_IPSET_SETNAME}.*src")
+            # ipset creation using restore parameter
+            {
+                echo "create ${RCB_IPSET_SETNAME} hash:net ${RCB_IPSET_FAMILY} maxelem 500000 -exist"
 
-            if [ $? -ne 0 ]; then
+                echo "flush ${RCB_IPSET_SETNAME}"
 
-                # Add ipset to iptables.
-                RCB_IPTABLES_SET_RESULT=$($RCB_IPTABLES_VERSION -I INPUT 1 -m set --match-set ${RCB_IPSET_SETNAME} src -j DROP)
-                RCB_IPTABLES_SET_RESULT_CODE=$?
+                sed "s/^/add ${RCB_IPSET_SETNAME} /" "${RCB_DATA_FILE}"
+            } | ipset -q restore
 
-                if [ $RCB_IPTABLES_SET_RESULT_CODE -ne 0 ]; then
-                    output_message "${RCB_IPSET_SETNAME} not added to iptables!" "ERROR" false false
-                    exit $RCB_IPTABLES_SET_RESULT
+            # Ingress Logic
+            if [[ "$RCB_BLOCK_INGRESS" == true ]]; then
+                if ! $RCB_IPTABLES_VERSION -nL INPUT | grep -q -e "match-set.*${RCB_IPSET_SETNAME}.*src"; then
+                    if ! $RCB_IPTABLES_VERSION -I INPUT 1 -m set --match-set "${RCB_IPSET_SETNAME}" src -j DROP; then
+                        output_message "${RCB_IPSET_SETNAME} ingress rules not added to iptables!" "ERROR" false false
+                        exit 1
+                    fi
+                    output_message "${RCB_IPSET_SETNAME} ingress iptables added, job finished!" "INFO" false false
                 else
-                    output_message "${RCB_IPSET_SETNAME} added to iptables, job finished!" "INFO" false false
-                fi    
-            else
-                output_message "${RCB_IPSET_SETNAME} already added before to iptables, job finished!" "INFO" false false
+                    output_message "${RCB_IPSET_SETNAME} ingress iptables updated, job finished!" "INFO" false false
+                fi
+            fi
+
+            # Egress Logic
+            if [[ "$RCB_BLOCK_EGRESS" == true ]]; then
+                if ! $RCB_IPTABLES_VERSION -nL OUTPUT | grep -q -e "match-set.*${RCB_IPSET_SETNAME}.*dst"; then
+                    if ! $RCB_IPTABLES_VERSION -A OUTPUT -m set --match-set "${RCB_IPSET_SETNAME}" dst -j DROP; then
+                        output_message "${RCB_IPSET_SETNAME} egress rules not added to iptables!" "ERROR" false false
+                        exit 1
+                    fi
+                    output_message "${RCB_IPSET_SETNAME} egress iptables added, job finished!" "INFO" false false
+                else
+                    output_message "${RCB_IPSET_SETNAME} egress iptables updated, job finished!" "INFO" false false
+                fi
             fi
         fi
     fi
