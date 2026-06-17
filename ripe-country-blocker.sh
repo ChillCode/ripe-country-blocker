@@ -181,7 +181,6 @@ delete_gcloud_rule() {
     local RCB_GCLOUD_ISO="${1}"
     local RCB_GCLOUD_FAMILY="${2}"
     local RCB_GCLOUD_DIR="${3}"
-    local RCB_GCLOUD_RULES_TO_DELETE_RAW
 
     if ! RCB_GCLOUD_RULES_TO_DELETE=$(gcloud compute firewall-rules list --filter="name:block-country-${RCB_GCLOUD_ISO}-${RCB_GCLOUD_FAMILY}-${RCB_GCLOUD_DIR}*" --format="value(name)" --quiet --verbosity=none); then
         output_message "Unable to list GCloud firewall rules for ${RCB_GCLOUD_ISO}-${2}-${RCB_GCLOUD_DIR}, check gcloud configuration and IAM permissions" "ERROR" false true
