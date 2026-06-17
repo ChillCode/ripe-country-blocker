@@ -12,9 +12,6 @@ This script supports local packet filtering via iptables/ipset as well as cloud-
 **--cc=XX**
 The 2-digit ISO-3166 country code to block. Examples include CH, US, IN, BR, RU. This argument is required.
 
-**--f**
-Force update. Forces a fresh ripe DB update.
-
 **--i**
 Block ingress (incoming) traffic.
 
