@@ -289,6 +289,11 @@ for RCB_FAMILY in ipv4 ipv6; do
         continue
     fi
 
+    if [[ ! -s "$RCB_DATA_FILE.tmp" ]]; then
+        output_message "${RCB_FAMILY} contains no prefixes for ${RCB_COUNTRY_ISO_CODE}" "INFO" false false
+        continue
+    fi
+
     # Lockup total entries to block.
     RCB_DATA_FILE_ENTRIES=$(awk 'END { print NR }' "$RCB_DATA_FILE.tmp")
 
@@ -316,6 +321,7 @@ for RCB_FAMILY in ipv4 ipv6; do
 
             RCB_GCLOUD_COUNTER=0
             RCB_GCLOUD_CHUNK="${RCB_DATA_FILE}_chunk_"
+
             split -l 5000 "${RCB_DATA_FILE}" "${RCB_GCLOUD_CHUNK}"
 
             for CHUNK in "${RCB_GCLOUD_CHUNK}"*; do
