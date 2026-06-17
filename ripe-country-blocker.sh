@@ -250,8 +250,6 @@ if [[ ! -d "${RCB_WORK_DIR}" ]]; then
 fi
 
 cleanup() {
-    local RCB_WORK_DIR
-
     if [[ -d "${RCB_WORK_DIR}" ]]; then
         rm -rf "${RCB_WORK_DIR}"
     fi
