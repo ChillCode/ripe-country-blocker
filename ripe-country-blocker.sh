@@ -144,7 +144,7 @@ if [ -z "$RCB_COUNTRY_ISO_CODE" ]; then
 fi
 
 if ! [[ "$RCB_COUNTRY_ISO_CODE" =~ ^[A-Za-z]{2}$ ]]; then
-    output_message "Invalid argument: --cc=ISO Country code must be 2-sigit code." "ERROR" false false
+    output_message "Invalid argument: --cc=ISO Country code must be 2-digit code." "ERROR" false false
     output_message "Type '${RCB_INFO_NAME} --help' for available options." "ERROR" false true
 fi
 
@@ -187,6 +187,8 @@ delete_gcloud_rule() {
 
     if [ -n "${RCB_GCLOUD_RULES_TO_DELETE}" ]; then
         # Delete current rules if exists.
+        # shellcheck disable=SC2086
+        # Intentional word splitting: gcloud delete expects multiple rule names as separate arguments.
         if ! gcloud compute firewall-rules delete ${RCB_GCLOUD_RULES_TO_DELETE} --quiet --verbosity=none >/dev/null 2>&1; then
             output_message "Failed to delete firewall rule ${RCB_GCLOUD_RULES_TO_DELETE}" "ERROR" false true
         else
@@ -316,7 +318,7 @@ for RCB_FAMILY in ipv4 ipv6; do
         # Use gcloud
         if [[ "$RCB_USE_GCLOUD" == true ]]; then
             # Delete current rules if exists. Faster than update at the time tests were done.
-            delete_gcloud_rule ${RCB_COUNTRY_ISO_CODE_LOWER} ${RCB_FAMILY} ${RCB_DIR_LOWER}
+            delete_gcloud_rule "${RCB_COUNTRY_ISO_CODE_LOWER}" "${RCB_FAMILY}" "${RCB_DIR_LOWER}"
 
             # Set direction
             RCB_RANGES_FLAG="--source-ranges"
