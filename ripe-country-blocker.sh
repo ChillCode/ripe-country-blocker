@@ -31,6 +31,8 @@ RCB_BLOCK_EGRESS=false
 # Display program usage.
 #
 print_usage() {
+    echo "${RCB_INFO_DESCRIPTION} Version ${RCB_INFO_VERSION} - ${RCB_INFO_UPDATE}"
+    echo "Licensed under ${RCB_INFO_LICENSE} by ${RCB_INFO_AUTHOR} (${RCB_INFO_REPO})"
     echo
     printf "%s %s %s\n" "Usage:" "${RCB_INFO_NAME}" "[--cc=XX]"
     echo
