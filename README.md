@@ -1,6 +1,6 @@
 # ripe-country-blocker
 
-Intended to block network traffic from/to entire countries in dev envioremnets using up-to-date data from the RIPE database.
+Intended to block network traffic from/to entire countries in dev environments using up-to-date data from the RIPE database.
 
 This script supports local packet filtering via iptables/ipset as well as cloud-managed filtering via Google Cloud Compute Engine firewall rules.
 
